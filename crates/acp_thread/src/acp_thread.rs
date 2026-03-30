@@ -54,7 +54,10 @@ pub struct MaxOutputTokensError;
 
 impl std::fmt::Display for MaxOutputTokensError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "output token limit reached")
+        write!(
+            f,
+            "Max output tokens reached for this response. Send 'continue' to resume."
+        )
     }
 }
 
@@ -2925,22 +2928,15 @@ impl AcpThread {
                         if r.stop_reason == acp::StopReason::MaxTokens {
                             this.had_error = true;
                             cx.emit(AcpThreadEvent::Error);
-                            log::error!("Max tokens reached. Usage: {:?}", this.token_usage);
-
-                            let exceeded_max_output_tokens =
-                                this.token_usage.as_ref().is_some_and(|u| {
-                                    u.max_output_tokens
-                                        .is_some_and(|max| u.output_tokens >= max)
-                                });
-
-                            if exceeded_max_output_tokens {
-                                log::error!(
-                                    "Max output tokens reached. Usage: {:?}",
-                                    this.token_usage
-                                );
-                            } else {
-                                log::error!("Max tokens reached. Usage: {:?}", this.token_usage);
-                            }
+                            let max_output_tokens = this
+                                .token_usage
+                                .as_ref()
+                                .and_then(|usage| usage.max_output_tokens);
+                            log::error!(
+                                "Max output tokens reached for this response (limit: {:?}). Usage: {:?}",
+                                max_output_tokens,
+                                this.token_usage
+                            );
                             if is_same_turn {
                                 this.mark_pending_entries_as_canceled(cx);
                             }
