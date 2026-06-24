@@ -1,0 +1,109 @@
+{
+  "generated": "2026-06-24 06:18 UTC",
+  "origin_main": "daf4656c871f",
+  "current": "mouse-bindings-v2",
+  "safe_delete": [
+    "backup/mouse-bindings-v2-before-rewrite",
+    "fix-agent-can-execute-tools-that-are-turned-off",
+    "fix-agent-thread-sidebar-covering-window-buttons",
+    "fix-ai-settings",
+    "fix-autosave-on-buffer-change-in-multibuffer",
+    "fix-character-not-encoded-properly",
+    "fix-claude-agent-model-reset",
+    "fix-commands-remove-indentation",
+    "fix-diagnostics-auto-enable",
+    "fix-diagnostics-toggle",
+    "fix-diagnostics-toggling",
+    "fix-file-rename-on-fuse-based-filesystems",
+    "fix-git-worktree-popup-lists-no-worktree",
+    "fix-highlight-await-as-keyword.control-in-JS/TS/TSX",
+    "fix-max-token-error-message",
+    "fix-no-copy-command",
+    "fix-outline-filtering-always-select-last-match",
+    "fix-preserve-settings-during-migrations",
+    "fix-renaming-html-dots-not-support-dots",
+    "fix-repeated-prompts-in-opencode-acp",
+    "fix-replace-all",
+    "fix-slow-tree-sitter-parsing",
+    "fix-two-focused-states",
+    "fix-wrong-selection-in-commit-panel",
+    "fix/debugger-start-ignore-save-property",
+    "fix/devcontainer-compose-labels",
+    "fix/diagnostics-toolbar-hide-inline-assist-when-agent-disabled",
+    "fix/duplicating-files-select-only-copy-suffix",
+    "fix/eslint-monorepo-working-directory",
+    "fix/gemini-tool-schema-unsupported-keys",
+    "fix/ordered-list-indent-outdent",
+    "fix/x11-content-size",
+    "git_ui/fix-diff-clipboard-multibuffer",
+    "git_ui/splittable-editor-diff-view",
+    "linux/fix-agent-panel-keybindings",
+    "scratch/mouse-bindings-backup",
+    "user-configurable-mouse-bindings"
+  ],
+  "keep": [
+    "fix-git-tempalte-do-not-work-in-reote",
+    "fix-mcp-servers-in-multi-root-wrokspaces",
+    "fix-tab-switcher-random-jumps",
+    "fix-zoom-pan-not-possible-in-svg-preview",
+    "main",
+    "mouse-bindings-v2"
+  ],
+  "keep_review": [
+    "agent_ui/fix-relative-file-links",
+    "clickable-breadcrumbs",
+    "feat/support-eslint-in-monorepos",
+    "fix-autosave-on-focus-change-error-when-switching-git-diff",
+    "fix-breakpoint-placement-guards",
+    "fix-broken-link-for-zed-release",
+    "fix-copilot-thinking-levels",
+    "fix-crash-on-mutiple-selections-in-helix-mode",
+    "fix-debugger-not-taking-to-node_modules",
+    "fix-dev-container-fails-with-updateRemoteUserUID",
+    "fix-devcontainer-fails-while-using-labels",
+    "fix-devcontainer-incorrectly-resolves-incorrect-file-path",
+    "fix-diff-keyboard-split-view",
+    "fix-error-response-max-token-reached",
+    "fix-git-new-staged-files-stays-untracked",
+    "fix-graph-continous-crash",
+    "fix-markdown-tab-title",
+    "fix-max-output-token-error",
+    "fix-numbering-for-indented-list",
+    "fix-support-snippet-completions",
+    "fix-tab-switcher-mouse-hover",
+    "fix/parent-numbering-for-indented-list",
+    "responsive-panel-sizing"
+  ],
+  "open_prs": [
+    {
+      "number": 55490,
+      "title": "Support loading Git commit templates when remote",
+      "headRefName": "fix-git-tempalte-do-not-work-in-reote",
+      "url": "https://github.com/zed-industries/zed/pull/55490"
+    },
+    {
+      "number": 55216,
+      "title": "Add user-configurable mouse and scroll wheel keybindings",
+      "headRefName": "mouse-bindings-v2",
+      "url": "https://github.com/zed-industries/zed/pull/55216"
+    },
+    {
+      "number": 54907,
+      "title": "svg_preview: Add zoom and pan support",
+      "headRefName": "fix-zoom-pan-not-possible-in-svg-preview",
+      "url": "https://github.com/zed-industries/zed/pull/54907"
+    },
+    {
+      "number": 52849,
+      "title": "Fix MCP servers in multi root workspaces",
+      "headRefName": "fix-mcp-servers-in-multi-root-wrokspaces",
+      "url": "https://github.com/zed-industries/zed/pull/52849"
+    },
+    {
+      "number": 52671,
+      "title": "Fix tab switcher random jumps",
+      "headRefName": "fix-tab-switcher-random-jumps",
+      "url": "https://github.com/zed-industries/zed/pull/52671"
+    }
+  ]
+}
