@@ -270,6 +270,10 @@ use workspace::{
 };
 pub use zed_actions::editor::RevealInFileManager;
 use zed_actions::editor::{MoveDown, MoveUp};
+use zed_actions::markdown::{
+    Indent as MarkdownIndent, IndentBehavior as MarkdownIndentBehavior,
+    Outdent as MarkdownOutdent, OutdentBehavior as MarkdownOutdentBehavior,
+};
 
 use crate::{
     code_context_menus::CompletionsMenuSource,
@@ -5288,6 +5292,424 @@ impl Editor {
                     None,
                     cx,
                 );
+            });
+            let selections = this
+                .selections
+                .all::<MultiBufferOffset>(&this.display_snapshot(cx));
+            this.change_selections(Default::default(), window, cx, |s| s.select(selections));
+        });
+    }
+
+    pub fn markdown_indent(
+        &mut self,
+        action: &MarkdownIndent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mode.is_single_line() {
+            cx.propagate();
+            return;
+        }
+
+        if action.behavior == MarkdownIndentBehavior::Tab
+            && self.move_to_next_snippet_tabstop(window, cx)
+        {
+            self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
+            return;
+        }
+
+        if self.read_only(cx) {
+            return;
+        }
+
+        if !self.should_use_markdown_ordered_list_indent(cx) {
+            match action.behavior {
+                MarkdownIndentBehavior::Tab => self.tab(&Tab, window, cx),
+                MarkdownIndentBehavior::Indent => self.indent(&Indent, window, cx),
+            }
+            return;
+        }
+
+        self.apply_markdown_ordered_list_indent(window, cx);
+    }
+
+    pub fn markdown_outdent(
+        &mut self,
+        action: &MarkdownOutdent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mode.is_single_line() {
+            cx.propagate();
+            return;
+        }
+
+        if action.behavior == MarkdownOutdentBehavior::Backtab {
+            self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
+            if self.move_to_prev_snippet_tabstop(window, cx) {
+                return;
+            }
+        }
+
+        if self.read_only(cx) {
+            return;
+        }
+
+        if !self.should_use_markdown_ordered_list_outdent(cx) {
+            self.outdent(&Outdent, window, cx);
+            return;
+        }
+
+        self.apply_markdown_ordered_list_outdent(window, cx);
+    }
+
+    fn should_use_markdown_ordered_list_indent(&self, cx: &mut App) -> bool {
+        let display_map = self.display_snapshot(cx);
+        let selections = self.selections.all::<Point>(&display_map);
+        let buffer = self.buffer.read(cx);
+        let snapshot = buffer.snapshot(cx);
+
+        for selection in &selections {
+            let start_row = selection.start.row;
+            let mut end_row = selection.end.row + 1;
+            if selection.end.column == 0 && selection.end.row > selection.start.row {
+                end_row -= 1;
+            }
+
+            for row in start_row..end_row {
+                let indent_len = snapshot.indent_size_for_line(MultiBufferRow(row)).len;
+                if let Some(language) = snapshot.language_scope_at(Point::new(row, indent_len))
+                    && ordered_list_marker(row, indent_len, &snapshot, &language).is_some()
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn should_use_markdown_ordered_list_outdent(&self, cx: &mut App) -> bool {
+        let display_map = self.display_map.update(cx, |map, cx| map.snapshot(cx));
+        let selections = self.selections.all::<Point>(&display_map);
+        let buffer = self.buffer.read(cx);
+        let snapshot = buffer.snapshot(cx);
+
+        for selection in &selections {
+            let rows = selection.spanned_rows(false, &display_map);
+            for row in rows.iter_rows() {
+                let indent_size = snapshot.indent_size_for_line(row);
+                if indent_size.len == 0 {
+                    continue;
+                }
+                if let Some(language) =
+                    snapshot.language_scope_at(Point::new(row.0, indent_size.len))
+                    && ordered_list_marker(row.0, indent_size.len, &snapshot, &language).is_some()
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn apply_markdown_ordered_list_indent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
+        let mut selections = self.selections.all::<Point>(&self.display_snapshot(cx));
+        let mut prev_edited_row = 0;
+        let mut row_delta = 0;
+        let mut edits = Vec::new();
+        let buffer = self.buffer.read(cx);
+        let snapshot = buffer.snapshot(cx);
+        for selection in &mut selections {
+            if selection.start.row != prev_edited_row {
+                row_delta = 0;
+            }
+            prev_edited_row = selection.end.row;
+
+            row_delta = Self::markdown_indent_selection(
+                buffer,
+                &snapshot,
+                selection,
+                &mut edits,
+                row_delta,
+                cx,
+            );
+        }
+
+        self.transact(window, cx, |this, window, cx| {
+            this.buffer.update(cx, |b, cx| b.edit(edits, None, cx));
+            this.change_selections(Default::default(), window, cx, |s| s.select(selections));
+        });
+    }
+
+    fn markdown_indent_selection(
+        buffer: &MultiBuffer,
+        snapshot: &MultiBufferSnapshot,
+        selection: &mut Selection<Point>,
+        edits: &mut Vec<(Range<Point>, String)>,
+        delta_for_start_row: u32,
+        cx: &App,
+    ) -> u32 {
+        let settings = buffer.language_settings_at(selection.start, cx);
+        let tab_size = settings.tab_size.get();
+        let indent_kind = if settings.hard_tabs {
+            IndentKind::Tab
+        } else {
+            IndentKind::Space
+        };
+        let mut start_row = selection.start.row;
+        let mut end_row = selection.end.row + 1;
+
+        if selection.end.column == 0 && selection.end.row > selection.start.row {
+            end_row -= 1;
+        }
+
+        if delta_for_start_row > 0 {
+            start_row += 1;
+            selection.start.column += delta_for_start_row;
+            if selection.end.row == selection.start.row {
+                selection.end.column += delta_for_start_row;
+            }
+        }
+
+        let mut delta_for_end_row = 0;
+        let mut next_ordered_list_number: Option<u32> = None;
+        let has_multiple_rows = start_row + 1 != end_row;
+        let mut trailing_renumber_anchor_row: Option<u32> = None;
+        let mut trailing_renumber_indent_len: Option<u32> = None;
+        let mut moved_ordered_items_at_trailing_indent = 0u32;
+        for row in start_row..end_row {
+            let current_indent = snapshot.indent_size_for_line(MultiBufferRow(row));
+            let indent_delta = match (current_indent.kind, indent_kind) {
+                (IndentKind::Space, IndentKind::Space) => {
+                    let columns_to_next_tab_stop = tab_size - (current_indent.len % tab_size);
+                    IndentSize::spaces(columns_to_next_tab_stop)
+                }
+                (IndentKind::Tab, IndentKind::Space) => IndentSize::spaces(tab_size),
+                (_, IndentKind::Tab) => IndentSize::tab(),
+            };
+
+            let start = if has_multiple_rows || current_indent.len < selection.start.column {
+                0
+            } else {
+                selection.start.column
+            };
+            let row_start = Point::new(row, start);
+            edits.push((
+                row_start..row_start,
+                indent_delta.chars().collect::<String>(),
+            ));
+
+            if let Some(language) = snapshot.language_scope_at(Point::new(row, current_indent.len))
+            {
+                let renumber_to = *next_ordered_list_number.get_or_insert_with(|| {
+                    let target_indent_len = current_indent.len + indent_delta.len;
+                    previous_ordered_list_number_at_indent(
+                        row,
+                        target_indent_len,
+                        snapshot,
+                        &language,
+                    ) + 1
+                });
+                if let Some((marker_start_col, marker_end_col, marker_text)) =
+                    ordered_list_indent_renumber(
+                        row,
+                        &current_indent,
+                        snapshot,
+                        &language,
+                        renumber_to,
+                    )
+                {
+                    edits.push((
+                        Point::new(row, marker_start_col)..Point::new(row, marker_end_col),
+                        marker_text,
+                    ));
+                    if has_multiple_rows {
+                        next_ordered_list_number = Some(renumber_to.saturating_add(1));
+                    }
+
+                    if let Some(indent_len) = trailing_renumber_indent_len {
+                        if current_indent.len == indent_len {
+                            moved_ordered_items_at_trailing_indent += 1;
+                        }
+                    } else {
+                        trailing_renumber_anchor_row = Some(row);
+                        trailing_renumber_indent_len = Some(current_indent.len);
+                        moved_ordered_items_at_trailing_indent = 1;
+                    }
+                }
+            }
+
+            if row == selection.start.row {
+                selection.start.column += indent_delta.len;
+            }
+            if row == selection.end.row {
+                selection.end.column += indent_delta.len;
+                delta_for_end_row = indent_delta.len;
+            }
+        }
+
+        if moved_ordered_items_at_trailing_indent > 0
+            && let (Some(anchor_row), Some(indent_len)) =
+                (trailing_renumber_anchor_row, trailing_renumber_indent_len)
+            && let Some(language) = snapshot.language_scope_at(Point::new(anchor_row, indent_len))
+        {
+            renumber_following_ordered_list_siblings_after_indent(
+                previous_ordered_list_number_at_indent(anchor_row, indent_len, snapshot, &language)
+                    + 1,
+                end_row,
+                indent_len,
+                snapshot,
+                &language,
+                edits,
+            );
+        }
+
+        if selection.start.row == selection.end.row {
+            delta_for_start_row + delta_for_end_row
+        } else {
+            delta_for_end_row
+        }
+    }
+
+    fn apply_markdown_ordered_list_outdent(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
+        let display_map = self.display_map.update(cx, |map, cx| map.snapshot(cx));
+        let selections = self.selections.all::<Point>(&display_map);
+        let mut edits: Vec<(Range<Point>, String)> = Vec::new();
+        let mut last_outdent = None;
+        {
+            let buffer = self.buffer.read(cx);
+            let snapshot = buffer.snapshot(cx);
+            for selection in &selections {
+                let settings = buffer.language_settings_at(selection.start, cx);
+                let tab_size = settings.tab_size.get();
+                let mut rows = selection.spanned_rows(false, &display_map);
+
+                if let Some(last_row) = last_outdent
+                    && last_row == rows.start
+                {
+                    rows.start = rows.start.next_row();
+                }
+
+                let has_multiple_rows = rows.len() > 1;
+                let original_indent_len = snapshot.indent_size_for_line(rows.start).len;
+                let mut next_outdent_number = 0u32;
+                let mut moved_ordered_items_at_original_indent = 0u32;
+                let mut first_target_indent: Option<u32> = None;
+
+                for row in rows.iter_rows() {
+                    let indent_size = snapshot.indent_size_for_line(row);
+                    if indent_size.len > 0 {
+                        let deletion_len = match indent_size.kind {
+                            IndentKind::Space => {
+                                let columns_to_prev_tab_stop = indent_size.len % tab_size;
+                                if columns_to_prev_tab_stop == 0 {
+                                    tab_size
+                                } else {
+                                    columns_to_prev_tab_stop
+                                }
+                            }
+                            IndentKind::Tab => 1,
+                        };
+                        let start = if has_multiple_rows
+                            || deletion_len > selection.start.column
+                            || indent_size.len < selection.start.column
+                        {
+                            0
+                        } else {
+                            selection.start.column - deletion_len
+                        };
+                        let deletion_range =
+                            Point::new(row.0, start)..Point::new(row.0, start + deletion_len);
+                        edits.push((deletion_range, String::new()));
+
+                        if let Some(language) =
+                            snapshot.language_scope_at(Point::new(row.0, indent_size.len))
+                            && let Some(marker) =
+                                ordered_list_marker(row.0, indent_size.len, &snapshot, &language)
+                        {
+                            let target_indent = indent_size.len.saturating_sub(deletion_len);
+
+                            if next_outdent_number == 0 {
+                                next_outdent_number = previous_ordered_list_number_at_indent(
+                                    row.0,
+                                    target_indent,
+                                    &snapshot,
+                                    &language,
+                                ) + 1;
+                                first_target_indent = Some(target_indent);
+                            }
+
+                            if marker.number != next_outdent_number {
+                                let new_marker = marker
+                                    .format
+                                    .replace("{1}", &next_outdent_number.to_string());
+                                edits.push((
+                                    Point::new(row.0, marker.start_col)
+                                        ..Point::new(row.0, marker.end_col),
+                                    new_marker,
+                                ));
+                            }
+
+                            next_outdent_number += 1;
+                            if indent_size.len == original_indent_len {
+                                moved_ordered_items_at_original_indent += 1;
+                            }
+                        }
+
+                        last_outdent = Some(row);
+                    }
+                }
+
+                if moved_ordered_items_at_original_indent > 0 {
+                    let following_row = last_outdent.map_or(rows.start.0, |r| r.next_row().0);
+                    if let Some(language) =
+                        snapshot.language_scope_at(Point::new(rows.start.0, original_indent_len))
+                    {
+                        renumber_following_ordered_list_siblings_after_indent(
+                            previous_ordered_list_number_at_indent(
+                                rows.start.0,
+                                original_indent_len,
+                                &snapshot,
+                                &language,
+                            ) + 1,
+                            following_row,
+                            original_indent_len,
+                            &snapshot,
+                            &language,
+                            &mut edits,
+                        );
+                    }
+                }
+
+                if let Some(target_indent) = first_target_indent {
+                    let following_row = last_outdent.map_or(rows.start.0, |r| r.next_row().0);
+                    if let Some(language) =
+                        snapshot.language_scope_at(Point::new(rows.start.0, target_indent))
+                    {
+                        renumber_following_ordered_list_siblings_after_indent(
+                            next_outdent_number,
+                            following_row,
+                            target_indent,
+                            &snapshot,
+                            &language,
+                            &mut edits,
+                        );
+                    }
+                }
+            }
+        }
+
+        self.transact(window, cx, |this, window, cx| {
+            this.buffer.update(cx, |buffer, cx| {
+                buffer.edit(edits, None, cx);
             });
             let selections = this
                 .selections
@@ -12378,3 +12800,133 @@ pub fn multibuffer_context_lines(cx: &App) -> u32 {
         .unwrap_or(2)
         .min(32)
 }
+
+fn ordered_list_indent_renumber(
+    row: u32,
+    current_indent: &IndentSize,
+    snapshot: &MultiBufferSnapshot,
+    language: &LanguageScope,
+    renumber_to: u32,
+) -> Option<(u32, u32, String)> {
+    let marker = ordered_list_marker(row, current_indent.len, snapshot, language)?;
+    let marker_text = marker.format.replace("{1}", &renumber_to.to_string());
+    Some((marker.start_col, marker.end_col, marker_text))
+}
+
+#[derive(Clone)]
+struct OrderedListMarker {
+    start_col: u32,
+    end_col: u32,
+    number: u32,
+    format: String,
+}
+
+fn ordered_list_marker(
+    row: u32,
+    indent_len: u32,
+    snapshot: &MultiBufferSnapshot,
+    language: &LanguageScope,
+) -> Option<OrderedListMarker> {
+    let (buffer_snapshot, range) = snapshot.buffer_line_for_row(MultiBufferRow(row))?;
+    let indent_len = indent_len as usize;
+
+    let candidate: String = buffer_snapshot
+        .chars_for_range(range)
+        .skip(indent_len)
+        .take(ORDERED_LIST_MAX_MARKER_LEN)
+        .collect();
+
+    for ordered_config in language.ordered_list() {
+        let regex = match Regex::new(&ordered_config.pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        if let Some(captures) = regex.captures(&candidate) {
+            let full_match = captures.get(0)?;
+            let number = captures.get(1)?.as_str().parse().ok()?;
+            return Some(OrderedListMarker {
+                start_col: indent_len as u32,
+                end_col: (indent_len + full_match.len()) as u32,
+                number,
+                format: ordered_config.format.to_string(),
+            });
+        }
+    }
+
+    None
+}
+
+const ORDERED_LIST_BACKWARD_SCAN_LIMIT: u32 = 256;
+
+fn previous_ordered_list_number_at_indent(
+    before_row: u32,
+    indent_len: u32,
+    snapshot: &MultiBufferSnapshot,
+    language: &LanguageScope,
+) -> u32 {
+    let scan_limit = before_row.saturating_sub(ORDERED_LIST_BACKWARD_SCAN_LIMIT);
+    for row in (scan_limit..before_row).rev() {
+        let row = MultiBufferRow(row);
+        if snapshot.is_line_blank(row) {
+            continue;
+        }
+
+        let row_indent_len = snapshot.indent_size_for_line(row).len;
+        if row_indent_len < indent_len {
+            return 0;
+        }
+
+        if row_indent_len == indent_len {
+            if let Some(marker) = ordered_list_marker(row.0, indent_len, snapshot, language) {
+                return marker.number;
+            }
+            return 0;
+        }
+    }
+
+    0
+}
+
+fn renumber_following_ordered_list_siblings_after_indent(
+    mut next_number: u32,
+    following_start_row: u32,
+    indent_len: u32,
+    snapshot: &MultiBufferSnapshot,
+    language: &LanguageScope,
+    edits: &mut Vec<(Range<Point>, String)>,
+) {
+    let max_row = snapshot.max_point().row;
+
+    for row in following_start_row..=max_row {
+        let row = MultiBufferRow(row);
+        if snapshot.is_line_blank(row) {
+            break;
+        }
+
+        let row_indent_len = snapshot.indent_size_for_line(row).len;
+        if row_indent_len < indent_len {
+            break;
+        }
+
+        if row_indent_len > indent_len {
+            continue;
+        }
+
+        let Some(marker) = ordered_list_marker(row.0, indent_len, snapshot, language) else {
+            break;
+        };
+
+        if marker.number != next_number {
+            let marker_text = marker.format.replace("{1}", &next_number.to_string());
+            edits.push((
+                Point::new(row.0, marker.start_col)..Point::new(row.0, marker.end_col),
+                marker_text,
+            ));
+        }
+
+        next_number += 1;
+    }
+}
+
+
