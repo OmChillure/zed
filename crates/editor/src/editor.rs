@@ -5314,7 +5314,6 @@ impl Editor {
         if action.behavior == MarkdownIndentBehavior::Tab
             && self.move_to_next_snippet_tabstop(window, cx)
         {
-            self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
             return;
         }
 
@@ -5345,7 +5344,6 @@ impl Editor {
         }
 
         if action.behavior == MarkdownOutdentBehavior::Backtab {
-            self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
             if self.move_to_prev_snippet_tabstop(window, cx) {
                 return;
             }
@@ -5415,7 +5413,6 @@ impl Editor {
     }
 
     fn apply_markdown_ordered_list_indent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
         let mut selections = self.selections.all::<Point>(&self.display_snapshot(cx));
         let mut prev_edited_row = 0;
         let mut row_delta = 0;
@@ -5579,7 +5576,6 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.hide_mouse_cursor(HideMouseCursorOrigin::TypingAction, cx);
         let display_map = self.display_map.update(cx, |map, cx| map.snapshot(cx));
         let selections = self.selections.all::<Point>(&display_map);
         let mut edits: Vec<(Range<Point>, String)> = Vec::new();
@@ -12800,6 +12796,8 @@ pub fn multibuffer_context_lines(cx: &App) -> u32 {
         .unwrap_or(2)
         .min(32)
 }
+
+const ORDERED_LIST_MAX_MARKER_LEN: usize = 16;
 
 fn ordered_list_indent_renumber(
     row: u32,
